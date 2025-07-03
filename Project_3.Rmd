@@ -1,0 +1,172 @@
+---
+title: "Assignment Three Project"
+author: "Elphas Oyugi, Paul Hoos, Firuddin Aliyev"
+date: "2025-06-14"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r Libraries}
+library(sf)
+library(ggplot2)
+library(ggspatial)
+library(dplyr)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(gridExtra)
+library(tidyr)
+library(raster)
+library(terra)
+library(patchwork)
+library(spgwr)
+library(spData)
+library(here)
+```
+
+#Loading Shapefile for Sachsen as a geographic region as an area of interest,
+#Listing the files in the directory path folder
+
+```{r}
+shapefile_path <- here("data", "gadm41_DEU_shp", "gadm41_DEU_1.shp")
+list.files(shapefile_path)
+```
+
+#Wrangling the shapefile data to execute analysis process, filtering data for Sachsen and visualization 
+
+```{r}
+print(shapefile_path)
+germany_shp <- st_read(shapefile_path)
+names(germany_shp)
+unique(germany_shp$NAME_1)
+Sachsen <- germany_shp %>% filter(NAME_1 == "Sachsen")
+```
+# Plotting Sachsen as a geographical area of interest and visualization
+
+```{r}
+plot(st_geometry(Sachsen), main = "Sachsen")
+plot(st_geometry(Sachsen), col = "green", bg = "pink", main = "Sachsen")
+```
+
+#Descriptive summary of the shapefile data for Sachsen
+
+```{r}
+summary(Sachsen)
+```
+# Now its time to load Raster data for precipation and elevation, 
+However,shapefile data also loaded again to filter Sachsen
+
+```{r}
+shapefile_path <- here("data", "gadm41_DEU_shp", "gadm41_DEU_1.shp")
+germany_shp <- st_read(shapefile_path)
+Sachsen <- germany_shp %>% filter(NAME_1 == "Sachsen")
+
+raster_path <- here("data", "wc2.1_30s_elev.tif")
+elev_raster <- rast(raster_path)
+
+
+# Create file paths for all 12 months
+months <- sprintf("%02d", 1:12)
+precip_files <- file.path(here("data", "wc2.1_30s_prec"), paste0("wc2.1_30s_prec_", months, ".tif"))
+
+# Load all into a raster stack
+precip_stack <- rast(precip_files)  # creates a SpatRaster with 12 layers
+```
+
+#Build the sum of the months for annual precipation data (Crop and mask first for faster calculation)
+
+```{r}
+Sachsen <- st_transform(Sachsen, crs(precip_stack))
+precip_stack_sachsen <- mask(crop(precip_stack, Sachsen), Sachsen)
+precip_annual <- sum(precip_stack_sachsen)
+plot(precip_annual, main = "Annual Precipitation in Sachsen")
+```
+
+# Now crop and mask raster elevation data to Sachsen only as a geographic region
+
+```{r}
+Sachsen <- st_transform(Sachsen, crs(elev_raster))
+elev_sachsen <- mask(crop(elev_raster, Sachsen), Sachsen)
+```
+
+# Combine elevation and precipation
+
+```{r}
+elev_df <- as.data.frame(elev_sachsen, xy = TRUE, na.rm = TRUE)
+precip_df <- as.data.frame(precip_annual, xy = TRUE, na.rm = TRUE)
+
+combined_df <- merge(elev_df, precip_df, by = c("x", "y"))
+colnames(combined_df) <- c("longitude", "latitude", "elevation", "precip")
+```
+
+#sanity check
+
+```{r}
+head(combined_df)
+summary(combined_df)
+plot(combined_df$elevation, combined_df$precip)
+```
+
+#Analyze and visualize
+
+```{r}
+ggplot(combined_df, aes(x = elevation, y = precip)) +
+  geom_point(alpha = 0.3, color = "blue") +
+  geom_smooth(method = "lm", se = TRUE, color = "red") +
+  labs(title = "Precipitation vs Elevation in Sachsen",
+       x = "Elevation (m)", y = "Annual Precipitation (mm)") +
+  theme_minimal()
+
+model <- lm(precip ~ elevation, data = combined_df)
+summary(model)
+```
+
+#ANALYSIS OF THE OUTPUT ABOVE - elevation VS precipation;
+
+The scatterplot shows a strong positive relationship between elevation and annual precipitation in Sachsen. As elevation increases, precipitation tends to rise as well. The red regression line indicates a clear upward trend, suggesting that higher-altitude areas receive more rainfall — likely due to orographic effects. While there is some spread in the data at mid elevations (500–700 m), the overall correlation appears strong and linear.
+
+
+#Statistical Relationship: Precipitation ~ Elevation
+```{r}
+model <- lm(precip ~ elevation, data = combined_df)
+summary(model)
+```
+
+#Summary of the statistical relationship result above;
+
+There is a strong and statistically significant positive relationship between elevation and annual precipitation in Sachsen. The model explains approximately 82% of the variation in precipitation. On average, annual precipitation increases by 0.46 mm for every 1 meter increase in elevation. This supports the hypothesis that elevation plays a major role in local climate conditions within the region.
+
+
+#Make a nice map that compares elevation in Saxony to annual precipation
+
+```{r}
+# Convert raster data to data frames
+elev_plot_df <- as.data.frame(elev_sachsen, xy = TRUE, na.rm = TRUE)
+colnames(elev_plot_df) <- c("longitude", "latitude", "elevation")
+
+precip_plot_df <- as.data.frame(precip_annual, xy = TRUE, na.rm = TRUE)
+colnames(precip_plot_df) <- c("longitude", "latitude", "precip")
+
+# Elevation map
+elev_map <- ggplot() +
+  geom_raster(data = elev_plot_df, aes(x = longitude, y = latitude, fill = elevation)) +
+  geom_sf(data = Sachsen, fill = NA, color = "black", size = 0.3) +
+  scale_fill_gradient(name = "Elevation (m)", low = "beige", high = "darkgreen") +
+  labs(title = "Elevation in Sachsen") +
+  coord_sf() +
+  theme_minimal()
+
+# Precipitation map
+precip_map <- ggplot() +
+  geom_raster(data = precip_plot_df, aes(x = longitude, y = latitude, fill = precip)) +
+  geom_sf(data = Sachsen, fill = NA, color = "black", size = 0.3) +
+  scale_fill_gradient(name = "Precipitation (mm)", low = "lightblue", high = "darkblue") +
+  labs(title = "Annual Precipitation in Sachsen") +
+  coord_sf() +
+  theme_minimal()
+
+# Combine maps side by side
+elev_map
+precip_map
+```
